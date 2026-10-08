@@ -7,18 +7,68 @@
   // висеть и mouseup ушёл бы в background дважды
   if (document.getElementById(OVERLAY_ID)) return;
 
+  const Z_BACKDROP = "2147483646";
+  const Z_TOP = "2147483647";
+
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
+  // Критичные свойства дублируем inline: CSS может не инжектиться,
+  // а сайт - перебить его с !important
+  overlay.style.cssText = [
+    "position:fixed",
+    "left:0",
+    "top:0",
+    "width:100vw",
+    "height:100vh",
+    "margin:0",
+    "padding:0",
+    "background:rgba(0,0,0,0.3)",
+    "cursor:crosshair",
+    "user-select:none",
+    "-webkit-user-select:none",
+    "pointer-events:auto",
+    "z-index:" + Z_BACKDROP,
+  ].join(";");
 
   const selection = document.createElement("div");
   selection.className = "studylens-selection";
+  selection.style.cssText = [
+    "position:fixed",
+    "left:0",
+    "top:0",
+    "width:0",
+    "height:0",
+    "box-sizing:border-box",
+    "border:1px solid #4a9eff",
+    "background:rgba(74,158,255,0.15)",
+    "pointer-events:none",
+    "z-index:" + Z_TOP,
+  ].join(";");
 
   const indicator = document.createElement("div");
   indicator.className = "studylens-indicator";
+  indicator.style.cssText = [
+    "position:fixed",
+    "padding:1px 4px",
+    "font:11px/1.4 monospace",
+    "white-space:nowrap",
+    "background:#000",
+    "color:#fff",
+    "pointer-events:none",
+    "z-index:" + Z_TOP,
+  ].join(";");
 
-  selection.appendChild(indicator);
   overlay.appendChild(selection);
+  overlay.appendChild(indicator);
   document.documentElement.appendChild(overlay);
+
+  console.log("overlay: root created", overlay.id, overlay.className);
+  console.log(
+    "overlay: rect element",
+    selection.id,
+    selection.className,
+    selection.tagName
+  );
 
   let startX = 0;
   let startY = 0;
@@ -37,12 +87,18 @@
     const width = Math.abs(x - startX);
     const height = Math.abs(y - startY);
 
-    selection.style.left = left + "px";
-    selection.style.top = top + "px";
-    selection.style.width = width + "px";
-    selection.style.height = height + "px";
+    // setProperty с important: inline-important бьёт и наш CSS !important,
+    // и правила сайта, поэтому рамку не заглушить со стороны страницы
+    selection.style.setProperty("left", left + "px", "important");
+    selection.style.setProperty("top", top + "px", "important");
+    selection.style.setProperty("width", width + "px", "important");
+    selection.style.setProperty("height", height + "px", "important");
 
+    indicator.style.setProperty("left", left + width + "px", "important");
+    indicator.style.setProperty("top", top + height + "px", "important");
     indicator.textContent = `${Math.round(width)} x ${Math.round(height)}`;
+
+    console.log("overlay: mousemove rect=", left, top, width, height);
     return { left, top, width, height };
   };
 
