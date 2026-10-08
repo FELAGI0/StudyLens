@@ -6,7 +6,25 @@
 </head>
 <body>
   <h1>StudyLens</h1>
-  <p>Настройки скоро появятся</p>
+
+  <label for="apiKey">API Key</label>
+  <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off">
+
+  <label for="baseUrl">Base URL</label>
+  <input id="baseUrl" type="text" autocomplete="off">
+
+  <label for="model">Model</label>
+  <input id="model" type="text" autocomplete="off">
+
+  <div class="buttons">
+    <button id="save" type="button">Сохранить</button>
+    <button id="test" type="button">Проверить</button>
+  </div>
+
+  <div id="result"></div>
+
+  <p class="note">Ключ хранится локально в вашем браузере и не отправляется на сторонние серверы</p>
+
   <script src="popup.js"></script>
 </body>
 </html>

@@ -128,10 +128,135 @@
   let startY = 0;
   let dragging = false;
 
+  const STATUS_ID = "studylens-status";
+  const STATUS_STYLE_ID = "studylens-status-style";
+
+  // @keyframes нельзя задать через inline-стиль, поэтому держим их
+  // в отдельном теге и добавляем один раз
+  const ensureStatusStyles = () => {
+    if (document.getElementById(STATUS_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = STATUS_STYLE_ID;
+    style.textContent = [
+      "@keyframes studylens-dots{",
+      "0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}100%{content:''}",
+      "}",
+      "#studylens-status .studylens-dots::after{",
+      "content:'';animation:studylens-dots 1.2s steps(1,end) infinite;",
+      "}",
+      "#studylens-status .studylens-status-text{white-space:pre-wrap;word-break:break-word;}",
+    ].join("");
+    document.documentElement.appendChild(style);
+  };
+
+  const removeStatus = () => {
+    const el = document.getElementById(STATUS_ID);
+    if (el) el.remove();
+  };
+
+  const addCloseButton = (box) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "\u00d7";
+    setImp(btn, {
+      "flex": "0 0 auto",
+      "margin": "0",
+      "padding": "0",
+      "background": "transparent",
+      "border": "none",
+      "color": "#bbbbbb",
+      "font": "16px/1 system-ui, sans-serif",
+      "font-weight": "700",
+      "cursor": "pointer",
+      "pointer-events": "auto",
+    });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeStatus();
+    });
+    box.appendChild(btn);
+  };
+
+  const createStatus = () => {
+    removeStatus();
+    ensureStatusStyles();
+    const box = document.createElement("div");
+    box.id = STATUS_ID;
+    setImp(box, {
+      position: "fixed",
+      top: "16px",
+      right: "16px",
+      left: "auto",
+      bottom: "auto",
+      "z-index": Z_TOP,
+      background: "rgba(0,0,0,0.85)",
+      color: "#ffffff",
+      padding: "12px 16px",
+      "border-radius": "8px",
+      font: "13px/1.4 system-ui, sans-serif",
+      "max-width": "320px",
+      "box-sizing": "border-box",
+      display: "flex",
+      gap: "8px",
+      "align-items": "flex-start",
+      "text-align": "left",
+      "pointer-events": "auto",
+    });
+    document.documentElement.appendChild(box);
+    return box;
+  };
+
+  const startAnalysis = (base64) => {
+    const box = createStatus();
+    const text = document.createElement("div");
+    text.className = "studylens-status-text";
+    text.textContent = "Analyzing";
+    const dots = document.createElement("span");
+    dots.className = "studylens-dots";
+    text.appendChild(dots);
+    box.appendChild(text);
+    chrome.runtime.sendMessage({ type: "analyze-image", base64 });
+  };
+
+  const showResult = (fullText) => {
+    const box = document.getElementById(STATUS_ID) || createStatus();
+    box.textContent = "";
+    const text = document.createElement("div");
+    text.className = "studylens-status-text";
+    text.textContent =
+      fullText.length > 200 ? fullText.slice(0, 200) + "..." : fullText;
+    box.appendChild(text);
+    addCloseButton(box);
+  };
+
+  const showError = (error) => {
+    const box = document.getElementById(STATUS_ID) || createStatus();
+    box.textContent = "";
+    const text = document.createElement("div");
+    text.className = "studylens-status-text";
+    text.textContent = error;
+    setImp(text, { color: "#f87171" });
+    box.appendChild(text);
+    addCloseButton(box);
+  };
+
+  // Listener живёт до первого ответа analysis-*, потом снимается,
+  // чтобы не копились при повторных захватах
   const onMessage = (msg) => {
-    if (!msg || msg.type !== "captured-image") return;
-    console.log("captured image length:", msg.base64.length);
-    chrome.runtime.onMessage.removeListener(onMessage);
+    if (!msg) return;
+    if (msg.type === "captured-image") {
+      startAnalysis(msg.base64);
+      return;
+    }
+    if (msg.type === "analysis-result") {
+      showResult(msg.text);
+      chrome.runtime.onMessage.removeListener(onMessage);
+      return;
+    }
+    if (msg.type === "analysis-error") {
+      showError(msg.error);
+      chrome.runtime.onMessage.removeListener(onMessage);
+    }
   };
   chrome.runtime.onMessage.addListener(onMessage);
 

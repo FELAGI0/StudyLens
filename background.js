@@ -1,5 +1,11 @@
 console.log("StudyLens background loaded");
 
+const SYSTEM_PROMPT =
+  "Ты образовательный ассистент. Пользователь присылает скриншот учебного материала (задача, код, текст, схема, график). Разбери материал пошагово, объясни решение. Если это задача - дай ответ. Если тест с вариантами - обоснуй выбор. Отвечай на языке материала. Используй Markdown и LaTeX где уместно.";
+
+const DEFAULT_BASE_URL = "http://185.221.214.224:4100/v1";
+const DEFAULT_MODEL = "gpt-5.6-luna";
+
 chrome.commands.onCommand.addListener((command, tab) => {
   console.log("command received:", command);
   if (command !== "capture-area") return;
@@ -36,10 +42,91 @@ async function startCapture(tab) {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, sender) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "analyze-image") {
+    handleAnalyze(msg.base64, sender.tab);
+    return;
+  }
   if (!msg || msg.type !== "area-selected") return;
   handleSelection(msg.rect, sender.tab);
 });
+
+async function handleAnalyze(base64Image, tab) {
+  if (!tab || !tab.id) return;
+  try {
+    const text = await callAPI(base64Image, SYSTEM_PROMPT);
+    await chrome.tabs.sendMessage(tab.id, { type: "analysis-result", text });
+  } catch (err) {
+    await chrome.tabs.sendMessage(tab.id, {
+      type: "analysis-error",
+      error: err.message,
+    });
+  }
+}
+
+async function callAPI(base64Image, userPrompt) {
+  const stored = await chrome.storage.local.get(["apiKey", "baseUrl", "model"]);
+  const apiKey = stored.apiKey;
+  const baseUrl = stored.baseUrl || DEFAULT_BASE_URL;
+  const model = stored.model || DEFAULT_MODEL;
+
+  if (!apiKey) {
+    throw new Error("API key not set. Open extension popup and enter it.");
+  }
+
+  const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + apiKey,
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: userPrompt },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/png;base64," + base64Image },
+              },
+            ],
+          },
+        ],
+        max_tokens: 2000,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      if (response.status === 401) throw new Error("Invalid API key (401)");
+      if (response.status === 429) throw new Error("Rate limit (429)");
+      throw new Error(
+        "API error " + response.status + ": " + errText.slice(0, 200)
+      );
+    }
+
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (!text) throw new Error("Empty response from API");
+    return text;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// TODO(подэтап B): стриминг ответа через SSE (stream: true)
+async function callAPIStream(base64Image, userPrompt) {
+  throw new Error("callAPIStream not implemented");
+}
 
 async function handleSelection(rect, tab) {
   console.log("capture: rect=" + JSON.stringify(rect));
