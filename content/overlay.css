@@ -39,6 +39,12 @@
 
 #studylens-overlay .studylens-indicator {
   position: fixed !important;
+  width: max-content !important;
+  height: auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
   padding: 2px 6px !important;
   font-family: monospace !important;
   font-size: 11px !important;

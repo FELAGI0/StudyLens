@@ -67,12 +67,24 @@
 
   const indicator = document.createElement("div");
   indicator.className = "studylens-indicator";
+  indicator.textContent = "";
+  // Размер задаём явно max-content: если оставить width/height пустыми,
+  // сайт растянет голый div своим правилом. inline-important перебивает
+  // и site-стили, и наш CSS
   // translate(-100%,-100%) прижимает правый нижний угол индикатора к
-  // координате, которую задаём в updateBox - без замера размеров
+  // координате, которую задаём в updateBox - размер от transform не зависит
   setImp(indicator, {
     position: "fixed",
     top: "0",
     left: "0",
+    right: "auto",
+    bottom: "auto",
+    width: "max-content",
+    height: "auto",
+    "max-width": "none",
+    "min-width": "0",
+    "min-height": "0",
+    "box-sizing": "border-box",
     padding: "2px 6px",
     font: "11px/1.4 monospace",
     "white-space": "nowrap",
@@ -143,6 +155,19 @@
       top: top + height + "px",
     });
     indicator.textContent = `${Math.round(width)} x ${Math.round(height)}`;
+
+    console.log(
+      "indicator styles:",
+      JSON.stringify({
+        width: getComputedStyle(indicator).width,
+        height: getComputedStyle(indicator).height,
+        position: getComputedStyle(indicator).position,
+        display: getComputedStyle(indicator).display,
+        left: getComputedStyle(indicator).left,
+        top: getComputedStyle(indicator).top,
+        transform: getComputedStyle(indicator).transform,
+      })
+    );
 
     console.log(
       "updateBox:",
