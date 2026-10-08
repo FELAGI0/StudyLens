@@ -1,27 +1,38 @@
 console.log("StudyLens background loaded");
 
 chrome.commands.onCommand.addListener((command, tab) => {
+  console.log("command received:", command);
   if (command !== "capture-area") return;
   startCapture(tab);
 });
 
 async function startCapture(tab) {
+  // onCommand не гарантирует tab и не даёт url без host-доступа, поэтому тянем сами
   if (!tab || !tab.id) {
     tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
   }
+  console.log("startCapture for tab:", tab && tab.id, tab && tab.url);
   if (!tab || !tab.id) return;
 
+  console.log("injecting overlay...");
+  // CSS и JS инжектим независимо: сбой стилей не должен блокировать оверлей
   try {
     await chrome.scripting.insertCSS({
       target: { tabId: tab.id },
       files: ["content/overlay.css"],
     });
+  } catch (err) {
+    console.log("insertCSS error:", err.message);
+  }
+  try {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["content/overlay.js"],
     });
+    console.log("inject done");
   } catch (err) {
-    console.log("cannot inject here", err.message);
+    console.log("inject error:", err.message, err.stack);
+    console.log("cannot inject here");
   }
 }
 

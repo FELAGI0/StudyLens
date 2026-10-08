@@ -2,6 +2,9 @@
   const OVERLAY_ID = "studylens-overlay";
   const MIN_SIZE = 5;
 
+  // Пока оверлей на экране, повторный хоткей - no-op.
+  // Удалять старый узел нельзя: его document-листенеры остались бы
+  // висеть и mouseup ушёл бы в background дважды
   if (document.getElementById(OVERLAY_ID)) return;
 
   const overlay = document.createElement("div");

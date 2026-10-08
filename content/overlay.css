@@ -1,9 +1,16 @@
 #studylens-overlay {
   position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
   inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
   z-index: 2147483647 !important;
   background: rgba(0, 0, 0, 0.3) !important;
   cursor: crosshair !important;
+  pointer-events: auto !important;
   user-select: none !important;
   -webkit-user-select: none !important;
   margin: 0 !important;
