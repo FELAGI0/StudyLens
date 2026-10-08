@@ -7,37 +7,50 @@
   inset: 0 !important;
   width: 100vw !important;
   height: 100vh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
   z-index: 2147483646 !important;
   background: rgba(0, 0, 0, 0.3) !important;
   cursor: crosshair !important;
   pointer-events: auto !important;
   user-select: none !important;
   -webkit-user-select: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
   transition: none !important;
 }
 
+/* Геометрию рамки задаёт только JS через inline-important.
+   Здесь ничего про left/top/width/height быть не должно */
 #studylens-overlay .studylens-selection {
   position: fixed !important;
   box-sizing: border-box !important;
-  border: 1px solid #4a9eff !important;
-  background: rgba(74, 158, 255, 0.15) !important;
+  border: 2px solid #4a9eff !important;
+  background: rgba(74, 158, 255, 0.2) !important;
   pointer-events: none !important;
   z-index: 2147483647 !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
   transition: none !important;
 }
 
 #studylens-overlay .studylens-indicator {
   position: fixed !important;
-  padding: 1px 4px !important;
+  padding: 2px 6px !important;
   font-family: monospace !important;
   font-size: 11px !important;
   line-height: 1.4 !important;
   white-space: nowrap !important;
-  background: #000 !important;
-  color: #fff !important;
+  background: rgba(0, 0, 0, 0.85) !important;
+  color: #ffffff !important;
+  border-radius: 3px !important;
   pointer-events: none !important;
   z-index: 2147483647 !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
   transition: none !important;
 }

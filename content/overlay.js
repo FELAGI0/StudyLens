@@ -10,64 +10,106 @@
   const Z_BACKDROP = "2147483646";
   const Z_TOP = "2147483647";
 
+  // inline !important надёжнее CSS-файла: переживает и случай, когда
+  // стили не инжектнулись, и site-правила вида * { border: none !important },
+  // которые убивают обычный inline-стиль без important
+  const setImp = (el, props) => {
+    for (const k in props) el.style.setProperty(k, props[k], "important");
+  };
+
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
-  // Критичные свойства дублируем inline: CSS может не инжектиться,
-  // а сайт - перебить его с !important
-  overlay.style.cssText = [
-    "position:fixed",
-    "left:0",
-    "top:0",
-    "width:100vw",
-    "height:100vh",
-    "margin:0",
-    "padding:0",
-    "background:rgba(0,0,0,0.3)",
-    "cursor:crosshair",
-    "user-select:none",
-    "-webkit-user-select:none",
-    "pointer-events:auto",
-    "z-index:" + Z_BACKDROP,
-  ].join(";");
+  // inset:0 и right/bottom:0 надёжнее одного vh: оверлей тянется по
+  // краям содержащего блока, а не по вычисленной высоте окна
+  setImp(overlay, {
+    position: "fixed",
+    top: "0",
+    left: "0",
+    right: "0",
+    bottom: "0",
+    inset: "0",
+    width: "100vw",
+    height: "100vh",
+    margin: "0",
+    padding: "0",
+    "box-sizing": "border-box",
+    background: "rgba(0,0,0,0.3)",
+    cursor: "crosshair",
+    "user-select": "none",
+    "-webkit-user-select": "none",
+    "pointer-events": "auto",
+    "z-index": Z_BACKDROP,
+    display: "block",
+    visibility: "visible",
+    opacity: "1",
+    transition: "none",
+  });
 
   const selection = document.createElement("div");
   selection.className = "studylens-selection";
-  selection.style.cssText = [
-    "position:fixed",
-    "left:0",
-    "top:0",
-    "width:0",
-    "height:0",
-    "box-sizing:border-box",
-    "border:1px solid #4a9eff",
-    "background:rgba(74,158,255,0.15)",
-    "pointer-events:none",
-    "z-index:" + Z_TOP,
-  ].join(";");
+  setImp(selection, {
+    position: "fixed",
+    top: "0",
+    left: "0",
+    width: "0",
+    height: "0",
+    "box-sizing": "border-box",
+    border: "2px solid #4a9eff",
+    background: "rgba(74,158,255,0.2)",
+    "box-shadow": "inset 0 0 0 1px rgba(255,255,255,0.4)",
+    "pointer-events": "none",
+    "z-index": Z_TOP,
+    display: "block",
+    visibility: "visible",
+    opacity: "1",
+    transition: "none",
+  });
 
   const indicator = document.createElement("div");
   indicator.className = "studylens-indicator";
-  indicator.style.cssText = [
-    "position:fixed",
-    "padding:1px 4px",
-    "font:11px/1.4 monospace",
-    "white-space:nowrap",
-    "background:#000",
-    "color:#fff",
-    "pointer-events:none",
-    "z-index:" + Z_TOP,
-  ].join(";");
+  // translate(-100%,-100%) прижимает правый нижний угол индикатора к
+  // координате, которую задаём в updateBox - без замера размеров
+  setImp(indicator, {
+    position: "fixed",
+    top: "0",
+    left: "0",
+    padding: "2px 6px",
+    font: "11px/1.4 monospace",
+    "white-space": "nowrap",
+    background: "rgba(0,0,0,0.85)",
+    color: "#ffffff",
+    "border-radius": "3px",
+    "pointer-events": "none",
+    "z-index": Z_TOP,
+    transform: "translate(-100%, -100%)",
+    display: "block",
+    visibility: "visible",
+    opacity: "1",
+    transition: "none",
+  });
 
   overlay.appendChild(selection);
   overlay.appendChild(indicator);
   document.documentElement.appendChild(overlay);
 
-  console.log("overlay: root created", overlay.id, overlay.className);
   console.log(
-    "overlay: rect element",
-    selection.id,
+    "rect el created:",
+    selection.tagName,
     selection.className,
-    selection.tagName
+    selection.style.cssText
+  );
+  console.log("rect el in DOM:", document.contains(selection));
+  console.log(
+    "rect el computed:",
+    JSON.stringify({
+      position: getComputedStyle(selection).position,
+      display: getComputedStyle(selection).display,
+      zIndex: getComputedStyle(selection).zIndex,
+      border: getComputedStyle(selection).borderTopWidth,
+      background: getComputedStyle(selection).backgroundColor,
+      visibility: getComputedStyle(selection).visibility,
+      opacity: getComputedStyle(selection).opacity,
+    })
   );
 
   let startX = 0;
@@ -87,18 +129,30 @@
     const width = Math.abs(x - startX);
     const height = Math.abs(y - startY);
 
-    // setProperty с important: inline-important бьёт и наш CSS !important,
-    // и правила сайта, поэтому рамку не заглушить со стороны страницы
-    selection.style.setProperty("left", left + "px", "important");
-    selection.style.setProperty("top", top + "px", "important");
-    selection.style.setProperty("width", width + "px", "important");
-    selection.style.setProperty("height", height + "px", "important");
+    setImp(selection, {
+      left: left + "px",
+      top: top + "px",
+      width: width + "px",
+      height: height + "px",
+    });
 
-    indicator.style.setProperty("left", left + width + "px", "important");
-    indicator.style.setProperty("top", top + height + "px", "important");
+    // индикатор в правом нижнем углу рамки: translate(-100%,-100%)
+    // из стилей прижимает его туда этой же точкой
+    setImp(indicator, {
+      left: left + width + "px",
+      top: top + height + "px",
+    });
     indicator.textContent = `${Math.round(width)} x ${Math.round(height)}`;
 
-    console.log("overlay: mousemove rect=", left, top, width, height);
+    console.log(
+      "updateBox:",
+      left,
+      top,
+      width,
+      height,
+      selection.style.getPropertyValue("width"),
+      selection.style.getPropertyPriority("width")
+    );
     return { left, top, width, height };
   };
 
