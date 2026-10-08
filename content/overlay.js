@@ -195,6 +195,8 @@
       "border-radius": "8px",
       font: "13px/1.4 system-ui, sans-serif",
       "max-width": "320px",
+      "max-height": "70vh",
+      overflow: "auto",
       "box-sizing": "border-box",
       display: "flex",
       gap: "8px",
@@ -218,14 +220,33 @@
     chrome.runtime.sendMessage({ type: "analyze-image", base64 });
   };
 
-  const showResult = (fullText) => {
+  const showResult = (fullText, truncated) => {
     const box = document.getElementById(STATUS_ID) || createStatus();
     box.textContent = "";
+    // контент и футер в колонку, кнопка закрытия сидит рядом во flex-строке
+    const content = document.createElement("div");
+    setImp(content, {
+      display: "flex",
+      "flex-direction": "column",
+      "min-width": "0",
+      "flex": "1 1 auto",
+    });
     const text = document.createElement("div");
     text.className = "studylens-status-text";
-    text.textContent =
-      fullText.length > 200 ? fullText.slice(0, 200) + "..." : fullText;
-    box.appendChild(text);
+    text.textContent = fullText;
+    content.appendChild(text);
+    if (truncated) {
+      const note = document.createElement("div");
+      note.className = "studylens-status-note";
+      note.textContent = "(ответ обрезан по лимиту токенов)";
+      setImp(note, {
+        margin: "6px 0 0",
+        font: "11px/1.4 system-ui, sans-serif",
+        color: "#999999",
+      });
+      content.appendChild(note);
+    }
+    box.appendChild(content);
     addCloseButton(box);
   };
 
@@ -249,7 +270,7 @@
       return;
     }
     if (msg.type === "analysis-result") {
-      showResult(msg.text);
+      showResult(msg.text, msg.truncated);
       chrome.runtime.onMessage.removeListener(onMessage);
       return;
     }

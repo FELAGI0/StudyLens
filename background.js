@@ -1,7 +1,10 @@
 console.log("StudyLens background loaded");
 
 const SYSTEM_PROMPT =
-  "Ты образовательный ассистент. Пользователь присылает скриншот учебного материала (задача, код, текст, схема, график). Разбери материал пошагово, объясни решение. Если это задача - дай ответ. Если тест с вариантами - обоснуй выбор. Отвечай на языке материала. Используй Markdown и LaTeX где уместно.";
+  "Ты образовательный ассистент. Пользователь присылает скриншот учебного материала (задача, код, текст, схема, график). Разбери материал пошагово, объясни решение. Если это задача - дай ответ. Если тест с вариантами - обоснуй выбор. Отвечай на языке материала. Используй Markdown и LaTeX где уместно. Будь подробным, но если чувствуешь что приближаешься к лимиту - заверши текущую мысль и дай финальный ответ, не обрывайся на середине.";
+
+const MAX_TOKENS = 8000;
+const REQUEST_TIMEOUT_MS = 300000;
 
 const DEFAULT_BASE_URL = "http://185.221.214.224:4100/v1";
 const DEFAULT_MODEL = "gpt-5.6-luna";
@@ -54,8 +57,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function handleAnalyze(base64Image, tab) {
   if (!tab || !tab.id) return;
   try {
-    const text = await callAPI(base64Image, SYSTEM_PROMPT);
-    await chrome.tabs.sendMessage(tab.id, { type: "analysis-result", text });
+    const { text, finishReason } = await callAPI(base64Image, SYSTEM_PROMPT);
+    await chrome.tabs.sendMessage(tab.id, {
+      type: "analysis-result",
+      text,
+      truncated: finishReason === "length",
+    });
   } catch (err) {
     await chrome.tabs.sendMessage(tab.id, {
       type: "analysis-error",
@@ -77,7 +84,7 @@ async function callAPI(base64Image, userPrompt) {
   const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {
@@ -100,7 +107,7 @@ async function callAPI(base64Image, userPrompt) {
             ],
           },
         ],
-        max_tokens: 2000,
+        max_tokens: MAX_TOKENS,
       }),
       signal: controller.signal,
     });
@@ -115,9 +122,10 @@ async function callAPI(base64Image, userPrompt) {
     }
 
     const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content;
+    const choice = data?.choices?.[0];
+    const text = choice?.message?.content;
     if (!text) throw new Error("Empty response from API");
-    return text;
+    return { text, finishReason: choice?.finish_reason };
   } finally {
     clearTimeout(timeoutId);
   }

@@ -84,7 +84,7 @@ async function testKey(apiKey, baseUrl, model) {
             ],
           },
         ],
-        max_tokens: 16,
+        max_tokens: 64,
       }),
       signal: controller.signal,
     });
