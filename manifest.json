@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "description": "Выделите область экрана с учебным материалом и получите объяснение решения",
   "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["http://185.221.214.224:4100/*"],
+  "host_permissions": [
+    "http://185.221.214.224:4100/*",
+    "https://tokify.sale/*",
+    "https://study-lens-backend.onrender.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

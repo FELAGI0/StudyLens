@@ -7,23 +7,42 @@
 <body>
   <h1>StudyLens</h1>
 
-  <label for="apiKey">API Key</label>
-  <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off">
+  <div class="tabs">
+    <button id="tab-own-key" class="tab" type="button">Свой ключ</button>
+    <button id="tab-password" class="tab" type="button">По паролю</button>
+  </div>
 
-  <label for="baseUrl">Base URL</label>
-  <input id="baseUrl" type="text" autocomplete="off">
+  <div id="form-own-key" class="form">
+    <label for="apiKey">API Key</label>
+    <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off">
 
-  <label for="model">Model</label>
-  <input id="model" type="text" autocomplete="off">
+    <label for="baseUrl">Base URL</label>
+    <input id="baseUrl" type="text" autocomplete="off">
 
-  <div class="buttons">
-    <button id="save" type="button">Сохранить</button>
-    <button id="test" type="button">Проверить</button>
+    <label for="model">Model</label>
+    <input id="model" type="text" autocomplete="off">
+
+    <div class="buttons">
+      <button id="save-own-key" type="button">Сохранить</button>
+      <button id="test-own-key" type="button">Проверить</button>
+    </div>
+
+    <p class="note">Ключ хранится локально в вашем браузере и не отправляется на сторонние серверы</p>
+  </div>
+
+  <div id="form-password" class="form">
+    <label for="backendPassword">Password</label>
+    <input id="backendPassword" type="password" autocomplete="off">
+
+    <div class="buttons">
+      <button id="save-password" type="button">Сохранить</button>
+      <button id="test-password" type="button">Проверить</button>
+    </div>
+
+    <p class="note">Пароль выдаёт администратор. Запросы идут через сервер StudyLens.</p>
   </div>
 
   <div id="result"></div>
-
-  <p class="note">Ключ хранится локально в вашем браузере и не отправляется на сторонние серверы</p>
 
   <script src="popup.js"></script>
 </body>

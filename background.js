@@ -6,8 +6,9 @@ const SYSTEM_PROMPT =
 const MAX_TOKENS = 8000;
 const REQUEST_TIMEOUT_MS = 300000;
 
-const DEFAULT_BASE_URL = "http://185.221.214.224:4100/v1";
-const DEFAULT_MODEL = "gpt-5.6-luna";
+const DEFAULT_BASE_URL = "https://tokify.sale/v1";
+const DEFAULT_MODEL = "gpt-6-sol";
+const DEFAULT_BACKEND_URL = "https://study-lens-backend.onrender.com";
 
 chrome.commands.onCommand.addListener((command, tab) => {
   console.log("command received:", command);
@@ -72,7 +73,20 @@ async function handleAnalyze(base64Image, tab) {
 }
 
 async function callAPI(base64Image, userPrompt) {
-  const stored = await chrome.storage.local.get(["apiKey", "baseUrl", "model"]);
+  const stored = await chrome.storage.local.get([
+    "mode",
+    "apiKey",
+    "baseUrl",
+    "model",
+    "backendPassword",
+    "backendUrl",
+  ]);
+  const mode = stored.mode || "own-key";
+
+  if (mode === "password") {
+    return callBackend(base64Image, userPrompt, stored);
+  }
+
   const apiKey = stored.apiKey;
   const baseUrl = stored.baseUrl || DEFAULT_BASE_URL;
   const model = stored.model || DEFAULT_MODEL;
@@ -131,9 +145,116 @@ async function callAPI(base64Image, userPrompt) {
   }
 }
 
+async function callBackend(base64Image, userPrompt, stored) {
+  const password = stored.backendPassword;
+  const backendUrl = stored.backendUrl || DEFAULT_BACKEND_URL;
+
+  if (!password) {
+    throw new Error("Пароль не задан. Откройте настройки расширения.");
+  }
+
+  const url = backendUrl.replace(/\/+$/, "") + "/api/analyze";
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          password: password,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: userPrompt },
+                {
+                  type: "image_url",
+                  image_url: { url: "data:image/png;base64," + base64Image },
+                },
+              ],
+            },
+          ],
+        }),
+        signal: controller.signal,
+      });
+    } catch (netErr) {
+      throw new Error("Сервер StudyLens недоступен. Проверьте подключение.");
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error("Неверный пароль. Откройте настройки расширения.");
+      }
+      if (response.status === 429) {
+        throw new Error("Слишком много запросов. Подождите минуту.");
+      }
+      if (response.status >= 500) {
+        throw new Error("Ошибка сервера StudyLens. Попробуйте позже.");
+      }
+      const errText = await response.text();
+      throw new Error(
+        "Ошибка StudyLens " + response.status + ": " + errText.slice(0, 200)
+      );
+    }
+
+    // backend может отдать и JSON, и SSE (text/event-stream).
+    // Разбираем оба, чтобы не зависеть от того, какой вариант включён
+    const raw = await response.text();
+    const choice = parseBackendChoice(raw);
+    const text = choice?.message?.content;
+    if (!text) throw new Error("Пустой ответ от сервера.");
+    return { text, finishReason: choice?.finish_reason };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // TODO(подэтап B): стриминг ответа через SSE (stream: true)
 async function callAPIStream(base64Image, userPrompt) {
   throw new Error("callAPIStream not implemented");
+}
+
+// Извлекает choices[0] из полного JSON или собирает его из SSE-чанков
+function parseBackendChoice(raw) {
+  const trimmed = raw.trim();
+
+  if (trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(trimmed)?.choices?.[0];
+    } catch (e) {
+      // не полный JSON, пробуем как SSE ниже
+    }
+  }
+
+  let text = "";
+  let finishReason;
+  let sawChunk = false;
+
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("data:")) continue;
+    const payload = t.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    let obj;
+    try {
+      obj = JSON.parse(payload);
+    } catch (e) {
+      continue;
+    }
+    sawChunk = true;
+    const c = obj?.choices?.[0];
+    if (!c) continue;
+    if (typeof c.delta?.content === "string") text += c.delta.content;
+    if (typeof c.message?.content === "string") text += c.message.content;
+    if (c.finish_reason) finishReason = c.finish_reason;
+  }
+
+  if (!sawChunk) return undefined;
+  return { message: { content: text }, finish_reason: finishReason };
 }
 
 async function handleSelection(rect, tab) {

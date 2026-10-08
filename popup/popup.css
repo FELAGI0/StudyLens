@@ -16,6 +16,38 @@ h1 {
   font-weight: 600;
 }
 
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 16px;
+}
+
+.tab {
+  flex: 1;
+  padding: 6px 10px;
+  background: #2a2a2a;
+  color: #a0a0a0;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab:hover {
+  border-color: #4a9eff;
+}
+
+.tab.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.form.hidden {
+  display: none;
+}
+
 label {
   display: block;
   margin: 0 0 4px;
@@ -63,7 +95,8 @@ button:hover {
   border-color: #4a9eff;
 }
 
-#save {
+#save-own-key,
+#save-password {
   background: #2563eb;
   border-color: #2563eb;
   color: #fff;
