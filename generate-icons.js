@@ -19,7 +19,7 @@ const S_GLYPH = [
   "11110",
 ];
 
-const SIZES = [16, 48, 128];
+const SIZES = [16, 32, 48, 128];
 
 function buildPixels(size) {
   const px = Buffer.alloc(size * size * 4);

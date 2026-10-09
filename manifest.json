@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StudyLens",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Выделите область экрана с учебным материалом и получите объяснение решения",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": [
@@ -22,12 +22,14 @@
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
   "icons": {
     "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
