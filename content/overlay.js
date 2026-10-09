@@ -583,6 +583,18 @@
     setImp(about, { "font-size": "12px", color: "#999999", "line-height": "1.5" });
     card.appendChild(about);
 
+    const findbugNote = document.createElement("div");
+    findbugNote.textContent =
+      "Найди ошибку (Ctrl+Shift+F) - назначьте вручную в chrome://extensions/shortcuts " +
+      "(Chrome ограничивает до 4 автоматических хоткеев на расширение).";
+    setImp(findbugNote, {
+      margin: "10px 0 0",
+      "font-size": "11px",
+      color: "#808080",
+      "line-height": "1.5",
+    });
+    card.appendChild(findbugNote);
+
     backdrop.appendChild(card);
     document.documentElement.appendChild(backdrop);
     helpEl = backdrop;

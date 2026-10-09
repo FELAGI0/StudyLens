@@ -49,7 +49,6 @@
       "description": "Захват и перевод"
     },
     "capture-findbug": {
-      "suggested_key": { "default": "Ctrl+Shift+F" },
       "description": "Захват и поиск ошибок"
     }
   }
