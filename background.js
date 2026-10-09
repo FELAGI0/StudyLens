@@ -1,7 +1,38 @@
 console.log("StudyLens background loaded");
 
-const SYSTEM_PROMPT =
-  "Ты образовательный ассистент. Пользователь присылает скриншот учебного материала (задача, код, текст, схема, график). Разбери материал пошагово, объясни решение. Если это задача - дай ответ. Если тест с вариантами - обоснуй выбор. Отвечай на языке материала. Используй Markdown и LaTeX где уместно. Будь подробным, но если чувствуешь что приближаешься к лимиту - заверши текущую мысль и дай финальный ответ, не обрывайся на середине.";
+const PROMPTS = {
+  explain: {
+    title: "Объясни",
+    shortcut: "Ctrl+Shift+E",
+    system: `Ты образовательный ассистент. Пользователь присылает скриншот учебного материала (задача, код, текст, схема, график). Разбери материал пошагово, объясни решение. Если это задача - дай ответ. Если тест с вариантами - обоснуй выбор. Отвечай на языке материала. Используй Markdown и LaTeX где уместно. Будь подробным, но если чувствуешь что приближаешься к лимиту - заверши текущую мысль и дай финальный ответ.`,
+  },
+  short: {
+    title: "Кратко",
+    shortcut: "Ctrl+Shift+K",
+    system: `Ты образовательный ассистент. Пользователь присылает скриншот. Дай ТОЛЬКО краткий ответ без объяснений, без шагов решения, без воды. Одна-две строки максимум. Если это тест - просто буква правильного варианта. Если задача - только финальный ответ.`,
+  },
+  detailed: {
+    title: "Пошагово",
+    shortcut: "Ctrl+Shift+P",
+    system: `Ты образовательный ассистент. Пользователь присылает скриншот. Разбери МАКСИМАЛЬНО ПОДРОБНО: каждый шаг, каждое правило, с примерами и аналогиями. Объясняй так, как будто ученик видит тему впервые. Используй Markdown и LaTeX. Не торопись, разворачивай мысль.`,
+  },
+  translate: {
+    title: "Переведи",
+    shortcut: "Ctrl+Shift+T",
+    system: `Ты переводчик. Пользователь присылает скриншот с текстом. Определи язык текста. Если текст не на русском - переведи на русский. Если на русском - переведи на английский. Сохрани структуру и форматирование. Если в тексте есть незнакомые термины - добавь краткое пояснение в скобках.`,
+  },
+  findbug: {
+    title: "Найди ошибку",
+    shortcut: "Ctrl+Shift+F",
+    system: `Ты эксперт по поиску ошибок. Пользователь присылает скриншот кода, решения или текста. Найди все ошибки: синтаксические, логические, стилистические. Для каждой ошибки укажи:
+1. Где именно (строка, фрагмент)
+2. Что не так
+3. Как исправить
+Если ошибок нет - скажи об этом явно. Используй Markdown для форматирования.`,
+  },
+};
+
+const DEFAULT_MODE = "explain";
 
 const MAX_TOKENS = 8000;
 const REQUEST_TIMEOUT_MS = 300000;
@@ -15,18 +46,24 @@ const DEFAULT_BACKEND_URL = "https://study-lens-backend.onrender.com";
 // два параллельно на одной и той же странице
 const activeStreams = new Map();
 
+// Режим, выбранный хоткеем для конкретной вкладки, до момента отправки запроса
+const pendingModes = new Map();
+
 chrome.commands.onCommand.addListener((command, tab) => {
-  if (command !== "capture-area") return;
-  startCapture(tab);
+  const mode = command.replace(/^capture-/, "");
+  if (!PROMPTS[mode]) return;
+  startCapture(tab, mode);
 });
 
-async function startCapture(tab) {
+async function startCapture(tab, mode) {
   // onCommand не гарантирует tab и не даёт url без host-доступа, поэтому тянем сами
   if (!tab || !tab.id) {
     tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
   }
   if (!tab || !tab.id) return;
   const tabId = tab.id;
+
+  pendingModes.set(tabId, mode);
 
   await injectLibraries(tabId);
 
@@ -47,6 +84,12 @@ async function startCapture(tab) {
   } catch (err) {
     console.error("cannot inject here:", err.message);
   }
+
+  // сообщаем оверлею режим для заголовка; если оверлей уже висит с прошлого
+  // хоткея, его живой listener обновит режим
+  chrome.tabs
+    .sendMessage(tabId, { type: "set-mode", mode, title: PROMPTS[mode].title })
+    .catch(() => {});
 }
 
 // Библиотеки грузим через executeScript, а не <script src>: <script> попал бы
@@ -87,7 +130,13 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   if (!msg) return;
 
   if (msg.type === "analyze-image") {
-    handleAnalyze(msg.base64, sender.tab);
+    const tabId = sender.tab && sender.tab.id;
+    const explicit =
+      msg.mode && PROMPTS[msg.mode]
+        ? msg.mode
+        : tabId && pendingModes.get(tabId);
+    if (tabId) pendingModes.delete(tabId);
+    handleAnalyze(msg.base64, sender.tab, explicit);
     return;
   }
 
@@ -102,9 +151,19 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   }
 });
 
-async function handleAnalyze(base64Image, tab) {
+// Приоритет: явный режим от оверлея, затем режим хоткея, затем defaultMode из настроек
+async function resolveMode(explicitMode) {
+  if (explicitMode && PROMPTS[explicitMode]) return explicitMode;
+  const stored = await chrome.storage.local.get("defaultMode");
+  if (stored.defaultMode && PROMPTS[stored.defaultMode]) return stored.defaultMode;
+  return DEFAULT_MODE;
+}
+
+async function handleAnalyze(base64Image, tab, explicitMode) {
   if (!tab || !tab.id) return;
   const tabId = tab.id;
+  const mode = await resolveMode(explicitMode);
+  const prompt = (PROMPTS[mode] || PROMPTS[DEFAULT_MODE]).system;
 
   if (activeStreams.has(tabId)) activeStreams.get(tabId).abort();
   const controller = new AbortController();
@@ -168,7 +227,7 @@ async function handleAnalyze(base64Image, tab) {
   };
 
   await send({ type: "analysis-start" });
-  await callAPIStream(base64Image, SYSTEM_PROMPT, onChunk, onEnd, onError, controller);
+  await callAPIStream(base64Image, prompt, onChunk, onEnd, onError, controller);
 
   if (controller.signal.aborted && !closed) {
     buffer = "";

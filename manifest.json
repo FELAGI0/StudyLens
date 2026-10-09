@@ -32,11 +32,25 @@
     "128": "icons/icon128.png"
   },
   "commands": {
-    "capture-area": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+E"
-      },
-      "description": "Выделить область экрана"
+    "capture-explain": {
+      "suggested_key": { "default": "Ctrl+Shift+E" },
+      "description": "Захват и разбор (Объясни)"
+    },
+    "capture-short": {
+      "suggested_key": { "default": "Ctrl+Shift+K" },
+      "description": "Захват и краткий ответ"
+    },
+    "capture-detailed": {
+      "suggested_key": { "default": "Ctrl+Shift+P" },
+      "description": "Захват и пошаговый разбор"
+    },
+    "capture-translate": {
+      "suggested_key": { "default": "Ctrl+Shift+T" },
+      "description": "Захват и перевод"
+    },
+    "capture-findbug": {
+      "suggested_key": { "default": "Ctrl+Shift+F" },
+      "description": "Захват и поиск ошибок"
     }
   }
 }

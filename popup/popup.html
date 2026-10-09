@@ -7,6 +7,15 @@
 <body>
   <h1>StudyLens</h1>
 
+  <label for="defaultMode">Режим по умолчанию</label>
+  <select id="defaultMode">
+    <option value="explain">Объясни (Ctrl+Shift+E)</option>
+    <option value="short">Кратко (Ctrl+Shift+K)</option>
+    <option value="detailed">Пошагово (Ctrl+Shift+P)</option>
+    <option value="translate">Переведи (Ctrl+Shift+T)</option>
+    <option value="findbug">Найди ошибку (Ctrl+Shift+F)</option>
+  </select>
+
   <div class="tabs">
     <button id="tab-own-key" class="tab" type="button">Свой ключ</button>
     <button id="tab-password" class="tab" type="button">По паролю</button>
@@ -43,6 +52,19 @@
   </div>
 
   <div id="result"></div>
+
+  <details id="help">
+    <summary>Горячие клавиши и справка</summary>
+    <table class="hotkeys">
+      <tr><td>Ctrl+Shift+E</td><td>Объясни</td></tr>
+      <tr><td>Ctrl+Shift+K</td><td>Кратко</td></tr>
+      <tr><td>Ctrl+Shift+P</td><td>Пошагово</td></tr>
+      <tr><td>Ctrl+Shift+T</td><td>Переведи</td></tr>
+      <tr><td>Ctrl+Shift+F</td><td>Найди ошибку</td></tr>
+    </table>
+    <a href="chrome://extensions/shortcuts" target="_blank" rel="noopener noreferrer">Настроить горячие клавиши</a>
+    <p class="note">«Свой ключ» - запросы идут напрямую в API с вашим ключом. «По паролю» - запросы идут через сервер StudyLens, пароль выдаёт администратор.</p>
+  </details>
 
   <script src="popup.js"></script>
 </body>

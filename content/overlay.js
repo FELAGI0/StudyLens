@@ -119,6 +119,20 @@
   let rawText = "";
   let streaming = false;
   let renderTimer = null;
+  // режим для заголовка и отправки; приходит из background сообщением set-mode
+  let currentMode = null;
+  let currentTitle = null;
+  let helpEl = null;
+
+  // Текст справки держим константой: она нужна и в панели, и потенциально
+  // в подсказке, дублировать по коду не хочется
+  const HELP_SHORTCUTS = [
+    ["Ctrl+Shift+E", "Объясни"],
+    ["Ctrl+Shift+K", "Кратко"],
+    ["Ctrl+Shift+P", "Пошагово"],
+    ["Ctrl+Shift+T", "Переведи"],
+    ["Ctrl+Shift+F", "Найди ошибку"],
+  ];
 
   // @keyframes нельзя задать через inline-стиль, поэтому держим их
   // в отдельном теге и добавляем один раз
@@ -143,6 +157,15 @@
 
   const scrollToBottom = () => {
     if (panelEl) panelEl.scrollTop = panelEl.scrollHeight;
+  };
+
+  const updatePanelTitle = () => {
+    if (!panelEl) return;
+    const titleEl = panelEl.querySelector(".studylens-title");
+    if (titleEl) {
+      titleEl.textContent =
+        "StudyLens" + (currentTitle ? " \u00b7 " + currentTitle : "");
+    }
   };
 
   const removeStatus = () => {
@@ -219,9 +242,50 @@
       display: "flex",
       gap: "6px",
       "align-items": "center",
-      "justify-content": "flex-end",
+      "justify-content": "space-between",
       "flex": "0 0 auto",
     });
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "studylens-title";
+    titleEl.textContent =
+      "StudyLens" + (currentTitle ? " \u00b7 " + currentTitle : "");
+    setImp(titleEl, {
+      "flex": "1 1 auto",
+      "min-width": "0",
+      font: "12px/1.2 system-ui, sans-serif",
+      color: "#999999",
+      "white-space": "nowrap",
+      overflow: "hidden",
+      "text-overflow": "ellipsis",
+    });
+
+    const actions = document.createElement("div");
+    setImp(actions, {
+      display: "flex",
+      gap: "6px",
+      "align-items": "center",
+      "flex": "0 0 auto",
+    });
+
+    const helpBtn = makeButton("?", () => openHelp());
+    setImp(helpBtn, {
+      width: "20px",
+      height: "20px",
+      padding: "0",
+      "line-height": "18px",
+      "text-align": "center",
+      "font-size": "12px",
+      color: "#999999",
+    });
+    helpBtn.classList.add("studylens-help-btn");
+    // цвет задан inline-important, поэтому CSS :hover его не перебьёт - вешаем вручную
+    helpBtn.addEventListener("mouseenter", () =>
+      setImp(helpBtn, { color: "#ffffff" })
+    );
+    helpBtn.addEventListener("mouseleave", () =>
+      setImp(helpBtn, { color: "#999999" })
+    );
 
     const copyBtn = makeButton("Копировать", () => {
       navigator.clipboard.writeText(rawText).catch(() => {});
@@ -236,9 +300,12 @@
       "padding": "1px 7px",
     });
 
-    header.appendChild(copyBtn);
-    header.appendChild(cancelBtn);
-    header.appendChild(closeBtn);
+    actions.appendChild(helpBtn);
+    actions.appendChild(copyBtn);
+    actions.appendChild(cancelBtn);
+    actions.appendChild(closeBtn);
+    header.appendChild(titleEl);
+    header.appendChild(actions);
     box.appendChild(header);
 
     mdEl = document.createElement("div");
@@ -260,12 +327,6 @@
   };
 
   // --- Рендер Markdown + LaTeX -----------------------------------------------
-
-  const escapeHtml = (s) =>
-    s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
 
   // Формулы заменяем на маркеры ДО Markdown-парсинга: иначе marked съест
   // подчёркивания и звёздочки внутри формул. В атрибут кладём индекс в store,
@@ -421,16 +482,119 @@
   };
 
   const onPanelKeyDown = (e) => {
+    if (e.key === "Escape" && helpEl) {
+      closeHelp();
+      return;
+    }
     if (e.key === "Escape" && panelEl) {
       removeStatus();
     }
+  };
+
+  // --- Мини-справка (модальный блок поверх панели) ---------------------------
+
+  const closeHelp = () => {
+    if (helpEl) helpEl.remove();
+    helpEl = null;
+  };
+
+  const openHelp = () => {
+    closeHelp();
+
+    const backdrop = document.createElement("div");
+    backdrop.id = "studylens-help";
+    setImp(backdrop, {
+      position: "fixed",
+      inset: "0",
+      "z-index": Z_TOP,
+      background: "rgba(0,0,0,0.5)",
+      display: "flex",
+      "align-items": "center",
+      "justify-content": "center",
+      "pointer-events": "auto",
+      "font-family": "system-ui, sans-serif",
+    });
+    // клик по фону вне карточки закрывает справку
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closeHelp();
+    });
+
+    const card = document.createElement("div");
+    setImp(card, {
+      background: "#1e1e1e",
+      color: "#e0e0e0",
+      padding: "16px 18px",
+      "border-radius": "10px",
+      "max-width": "400px",
+      "max-height": "80vh",
+      overflow: "auto",
+      "box-sizing": "border-box",
+      font: "13px/1.5 system-ui, sans-serif",
+      "box-shadow": "0 8px 32px rgba(0,0,0,0.5)",
+      "text-align": "left",
+    });
+
+    const head = document.createElement("div");
+    setImp(head, {
+      display: "flex",
+      "align-items": "center",
+      "justify-content": "space-between",
+      gap: "12px",
+      "margin-bottom": "12px",
+    });
+    const headTitle = document.createElement("div");
+    headTitle.textContent = "Горячие клавиши и справка";
+    setImp(headTitle, { font: "14px/1.3 system-ui, sans-serif", color: "#ffffff", "font-weight": "600" });
+    const closeX = makeButton("\u00d7", () => closeHelp());
+    setImp(closeX, { "font-size": "16px", "font-weight": "700", padding: "0 8px" });
+    head.appendChild(headTitle);
+    head.appendChild(closeX);
+    card.appendChild(head);
+
+    const table = document.createElement("table");
+    setImp(table, { "border-collapse": "collapse", width: "100%", "margin-bottom": "12px" });
+    for (const [key, label] of HELP_SHORTCUTS) {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td");
+      td1.textContent = key;
+      setImp(td1, { padding: "3px 8px 3px 0", "font-family": "monospace", color: "#cccccc", "white-space": "nowrap" });
+      const td2 = document.createElement("td");
+      td2.textContent = label;
+      setImp(td2, { padding: "3px 0", color: "#a0a0a0" });
+      tr.appendChild(td1);
+      tr.appendChild(td2);
+      table.appendChild(tr);
+    }
+    card.appendChild(table);
+
+    const link = document.createElement("a");
+    link.textContent = "Настроить горячие клавиши";
+    link.href = "chrome://extensions/shortcuts";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    setImp(link, { color: "#4a9eff", "text-decoration": "underline", display: "inline-block", "margin-bottom": "12px" });
+    card.appendChild(link);
+
+    const about = document.createElement("div");
+    about.textContent =
+      "Режимы доступа: «Свой ключ» - запросы идут напрямую в API с вашим ключом. " +
+      "«По паролю» - запросы идут через сервер StudyLens, пароль выдаёт администратор. " +
+      "Режим по умолчанию выбирается в настройках расширения.";
+    setImp(about, { "font-size": "12px", color: "#999999", "line-height": "1.5" });
+    card.appendChild(about);
+
+    backdrop.appendChild(card);
+    document.documentElement.appendChild(backdrop);
+    helpEl = backdrop;
   };
 
   const startAnalysis = (base64) => {
     startPanel();
     cursorEl.style.setProperty("display", "inline", "important");
     document.addEventListener("keydown", onPanelKeyDown, true);
-    chrome.runtime.sendMessage({ type: "analyze-image", base64 });
+    const payload = { type: "analyze-image", base64 };
+    if (currentMode) payload.mode = currentMode;
+    chrome.runtime.sendMessage(payload);
   };
 
   // Не снимаем listener по ходу стрима: чанки идут потоком.
@@ -438,6 +602,12 @@
   const onMessage = (msg) => {
     if (!msg) return;
 
+    if (msg.type === "set-mode") {
+      currentMode = msg.mode;
+      currentTitle = msg.title || null;
+      updatePanelTitle();
+      return;
+    }
     if (msg.type === "captured-image") {
       startAnalysis(msg.base64);
       return;

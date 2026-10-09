@@ -22,6 +22,7 @@ const $savePassword = document.getElementById("save-password");
 const $testPassword = document.getElementById("test-password");
 
 const $result = document.getElementById("result");
+const $defaultMode = document.getElementById("defaultMode");
 
 let mode = "own-key";
 
@@ -47,13 +48,20 @@ async function loadSettings() {
     "model",
     "backendPassword",
     "backendUrl",
+    "defaultMode",
   ]);
   $apiKey.value = stored.apiKey || "";
   $baseUrl.value = stored.baseUrl || DEFAULT_BASE_URL;
   $model.value = stored.model || DEFAULT_MODEL;
   $backendPassword.value = stored.backendPassword || "";
+  $defaultMode.value = stored.defaultMode || "explain";
   applyMode(stored.mode === "password" ? "password" : "own-key");
 }
+
+$defaultMode.addEventListener("change", async () => {
+  await chrome.storage.local.set({ defaultMode: $defaultMode.value });
+  setResult("Режим сохранён", "ok");
+});
 
 $tabOwnKey.addEventListener("click", async () => {
   applyMode("own-key");
