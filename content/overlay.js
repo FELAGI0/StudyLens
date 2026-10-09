@@ -1,6 +1,7 @@
 (() => {
   const OVERLAY_ID = "studylens-overlay";
   const MIN_SIZE = 5;
+  const RENDER_THROTTLE_MS = 120;
 
   // Пока оверлей на экране, повторный хоткей - no-op.
   // Удалять старый узел нельзя: его document-листенеры остались бы
@@ -112,11 +113,12 @@
   const STATUS_STYLE_ID = "studylens-status-style";
 
   let panelEl = null;
-  let bodyTextEl = null;
+  let mdEl = null;
   let cursorEl = null;
   let cancelBtn = null;
-  let panelText = "";
+  let rawText = "";
   let streaming = false;
+  let renderTimer = null;
 
   // @keyframes нельзя задать через inline-стиль, поэтому держим их
   // в отдельном теге и добавляем один раз
@@ -135,7 +137,6 @@
       "#studylens-status .studylens-cursor{",
       "animation:studylens-blink 1s step-end infinite;",
       "}",
-      "#studylens-status .studylens-status-text{white-space:pre-wrap;word-break:break-word;}",
     ].join("");
     document.documentElement.appendChild(style);
   };
@@ -145,12 +146,16 @@
   };
 
   const removeStatus = () => {
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
+    }
     if (panelEl) panelEl.remove();
     panelEl = null;
-    bodyTextEl = null;
+    mdEl = null;
     cursorEl = null;
     cancelBtn = null;
-    panelText = "";
+    rawText = "";
     streaming = false;
     document.removeEventListener("keydown", onPanelKeyDown, true);
   };
@@ -192,12 +197,13 @@
       left: "auto",
       bottom: "auto",
       "z-index": Z_TOP,
-      background: "rgba(0,0,0,0.85)",
-      color: "#ffffff",
-      padding: "12px 16px",
+      background: "#1e1e1e",
+      color: "#e0e0e0",
+      padding: "16px",
       "border-radius": "8px",
-      font: "13px/1.4 system-ui, sans-serif",
-      "max-width": "320px",
+      font: "14px/1.6 system-ui, sans-serif",
+      "max-width": "480px",
+      "min-width": "240px",
       "max-height": "70vh",
       overflow: "auto",
       "box-sizing": "border-box",
@@ -218,7 +224,7 @@
     });
 
     const copyBtn = makeButton("Копировать", () => {
-      navigator.clipboard.writeText(panelText).catch(() => {});
+      navigator.clipboard.writeText(rawText).catch(() => {});
     });
     cancelBtn = makeButton("Отмена", () => {
       chrome.runtime.sendMessage({ type: "cancel-analysis" });
@@ -235,65 +241,160 @@
     header.appendChild(closeBtn);
     box.appendChild(header);
 
-    const body = document.createElement("div");
-    setImp(body, { "min-width": "0", "flex": "1 1 auto" });
+    mdEl = document.createElement("div");
+    mdEl.className = "studylens-md";
+    setImp(mdEl, { "min-width": "0", "flex": "1 1 auto" });
+    box.appendChild(mdEl);
 
-    bodyTextEl = document.createElement("span");
-    bodyTextEl.className = "studylens-status-text";
-    body.appendChild(bodyTextEl);
-
+    // курсор отдельным узлом после контейнера: innerHTML-перерендер его
+    // не затирает, и он всегда остаётся в конце текста
     cursorEl = document.createElement("span");
     cursorEl.className = "studylens-cursor";
     cursorEl.textContent = "\u258e";
+    cursorEl.style.setProperty("display", "none", "important");
+    box.appendChild(cursorEl);
 
-    box.appendChild(body);
     document.documentElement.appendChild(box);
-
     panelEl = box;
     return box;
   };
 
+  // --- Рендер Markdown + LaTeX -----------------------------------------------
+
+  const escapeHtml = (s) =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+  // Формулы заменяем на маркеры ДО Markdown-парсинга: иначе marked съест
+  // подчёркивания и звёздочки внутри формул. В атрибут кладём индекс в store,
+  // а не сам текст, чтобы Markdown не попортил содержимое формулы
+  const replaceLatex = (text, store) => {
+    let out = text.replace(/\$\$([\s\S]+?)\$\$/g, (m, tex) => {
+      const idx = store.push({ tex, block: true }) - 1;
+      return `<span class="katex-block" data-katex="${idx}"></span>`;
+    });
+    out = out.replace(/\$([^$\n]+?)\$/g, (m, tex) => {
+      // не трогаем "$5 и $10": у настоящей формулы пробелов по краям нет
+      if (!tex.trim() || /^\s/.test(tex) || /\s$/.test(tex)) return m;
+      const idx = store.push({ tex, block: false }) - 1;
+      return `<span class="katex-inline" data-katex="${idx}"></span>`;
+    });
+    return out;
+  };
+
+  const SANITIZE_CONFIG = {
+    ALLOWED_TAGS: [
+      "h1", "h2", "h3", "h4", "h5", "h6",
+      "p", "br", "hr", "strong", "em", "del", "code", "pre",
+      "blockquote", "ul", "ol", "li",
+      "table", "thead", "tbody", "tr", "th", "td",
+      "a", "span", "sup", "sub",
+    ],
+    ALLOWED_ATTR: ["href", "title", "align", "class", "data-katex", "target", "rel"],
+    ALLOW_DATA_ATTR: true,
+  };
+
+  const renderMarkdownTo = (container, raw) => {
+    const hasLibs = !!globalThis.marked && !!globalThis.DOMPurify;
+    if (!hasLibs) {
+      // без библиотек показываем как текст: безопасно и не падает
+      container.textContent = raw;
+      return;
+    }
+
+    const store = [];
+    const pre = replaceLatex(raw, store);
+
+    let html;
+    try {
+      html = globalThis.marked.parse(pre);
+    } catch (e) {
+      container.textContent = raw;
+      return;
+    }
+
+    const clean = globalThis.DOMPurify.sanitize(html, SANITIZE_CONFIG);
+    container.innerHTML = clean;
+
+    container.querySelectorAll("a[href]").forEach((a) => {
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener noreferrer");
+    });
+
+    if (globalThis.katex) {
+      container.querySelectorAll("[data-katex]").forEach((el) => {
+        const item = store[Number(el.getAttribute("data-katex"))];
+        if (!item) return;
+        try {
+          globalThis.katex.render(item.tex, el, {
+            displayMode: item.block,
+            throwOnError: false,
+          });
+        } catch (e) {
+          el.textContent = item.tex;
+        }
+      });
+    } else {
+      container.querySelectorAll("[data-katex]").forEach((el) => {
+        const item = store[Number(el.getAttribute("data-katex"))];
+        if (item) el.textContent = item.tex;
+      });
+    }
+  };
+
+  const doRender = () => {
+    if (!mdEl) return;
+    renderMarkdownTo(mdEl, rawText);
+    scrollToBottom();
+  };
+
+  // Перерендер всего текста на каждый чанк дорогой, поэтому throttle
+  // отдельно от throttle sendMessage в background
+  const scheduleRender = () => {
+    if (renderTimer) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      doRender();
+    }, RENDER_THROTTLE_MS);
+  };
+
+  // --- События панели --------------------------------------------------------
+
   const startPanel = () => {
     createPanel();
     streaming = true;
-    panelText = "";
+    rawText = "";
     setImp(cancelBtn, { display: "inline-block" });
 
-    bodyTextEl.textContent = "Analyzing";
+    mdEl.textContent = "Analyzing";
     const dots = document.createElement("span");
     dots.className = "studylens-dots";
-    bodyTextEl.appendChild(dots);
+    mdEl.appendChild(dots);
   };
 
   const appendChunk = (text) => {
     if (!panelEl) createPanel();
     if (!streaming) return;
-
-    // первый чанк приходит после "Analyzing" - затираем его
-    if (!panelText) bodyTextEl.textContent = "";
-
-    panelText += text;
-    bodyTextEl.textContent = panelText;
-    bodyTextEl.appendChild(cursorEl);
-
-    scrollToBottom();
+    rawText += text;
+    scheduleRender();
   };
 
   const endStream = (truncated) => {
-    if (!panelEl) return;
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
+    }
     streaming = false;
+    doRender();
     if (cancelBtn) setImp(cancelBtn, { display: "none" });
-    if (cursorEl) cursorEl.remove();
+    if (cursorEl) cursorEl.style.setProperty("display", "none", "important");
 
     if (truncated) {
       const note = document.createElement("div");
       note.className = "studylens-status-note";
       note.textContent = "(ответ обрезан по лимиту токенов)";
-      setImp(note, {
-        margin: "6px 0 0",
-        font: "11px/1.4 system-ui, sans-serif",
-        color: "#999999",
-      });
       panelEl.appendChild(note);
       scrollToBottom();
     }
@@ -303,23 +404,18 @@
     createPanel();
     streaming = false;
     if (cancelBtn) setImp(cancelBtn, { display: "none" });
-    bodyTextEl.textContent = error;
-    setImp(bodyTextEl, { color: "#f87171" });
+    mdEl.textContent = error;
+    setImp(mdEl, { color: "#f87171" });
   };
 
   const showCanceled = () => {
     if (!panelEl) return;
     streaming = false;
     if (cancelBtn) setImp(cancelBtn, { display: "none" });
-    if (cursorEl) cursorEl.remove();
+    if (cursorEl) cursorEl.style.setProperty("display", "none", "important");
     const note = document.createElement("div");
     note.className = "studylens-status-note";
     note.textContent = "(отменено)";
-    setImp(note, {
-      margin: "6px 0 0",
-      font: "11px/1.4 system-ui, sans-serif",
-      color: "#999999",
-    });
     panelEl.appendChild(note);
     scrollToBottom();
   };
@@ -332,6 +428,7 @@
 
   const startAnalysis = (base64) => {
     startPanel();
+    cursorEl.style.setProperty("display", "inline", "important");
     document.addEventListener("keydown", onPanelKeyDown, true);
     chrome.runtime.sendMessage({ type: "analyze-image", base64 });
   };

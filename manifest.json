@@ -9,6 +9,12 @@
     "https://tokify.sale/*",
     "https://study-lens-backend.onrender.com/*"
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "background": {
     "service_worker": "background.js"
   },

@@ -26,11 +26,14 @@ async function startCapture(tab) {
     tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
   }
   if (!tab || !tab.id) return;
+  const tabId = tab.id;
+
+  await injectLibraries(tabId);
 
   // CSS и JS инжектим независимо: сбой стилей не должен блокировать оверлей
   try {
     await chrome.scripting.insertCSS({
-      target: { tabId: tab.id },
+      target: { tabId },
       files: ["content/overlay.css"],
     });
   } catch (err) {
@@ -38,11 +41,45 @@ async function startCapture(tab) {
   }
   try {
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId },
       files: ["content/overlay.js"],
     });
   } catch (err) {
     console.error("cannot inject here:", err.message);
+  }
+}
+
+// Библиотеки грузим через executeScript, а не <script src>: <script> попал бы
+// в main world страницы, а оверлей живёт в изолированном мире со своим
+// globalThis и библиотек бы не увидел
+async function injectLibraries(tabId) {
+  const files = [
+    "lib/marked.min.js",
+    "lib/purify.min.js",
+    "lib/katex/katex.min.js",
+  ];
+  for (const file of files) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: [file],
+      });
+    } catch (err) {
+      console.error("lib inject failed:", file, err.message);
+    }
+  }
+
+  try {
+    const fontsBase = chrome.runtime.getURL("lib/katex/fonts/");
+    const raw = await (
+      await fetch(chrome.runtime.getURL("lib/katex/katex.min.css"))
+    ).text();
+    // url(fonts/...) в CSS резолвятся от корня расширения, а не от самого
+    // файла css, поэтому переписываем пути на абсолютные
+    const css = raw.replace(/url\(fonts\//g, "url(" + fontsBase);
+    await chrome.scripting.insertCSS({ target: { tabId }, css });
+  } catch (err) {
+    console.error("katex css inject failed:", err.message);
   }
 }
 
