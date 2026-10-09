@@ -5,13 +5,17 @@ const SYSTEM_PROMPT =
 
 const MAX_TOKENS = 8000;
 const REQUEST_TIMEOUT_MS = 300000;
+const CHUNK_FLUSH_MS = 90;
 
 const DEFAULT_BASE_URL = "https://tokify.sale/v1";
 const DEFAULT_MODEL = "gpt-6-sol";
 const DEFAULT_BACKEND_URL = "https://study-lens-backend.onrender.com";
 
+// Активные стримы по вкладке: нужны, чтобы отменять запрос и не запускать
+// два параллельно на одной и той же странице
+const activeStreams = new Map();
+
 chrome.commands.onCommand.addListener((command, tab) => {
-  console.log("command received:", command);
   if (command !== "capture-area") return;
   startCapture(tab);
 });
@@ -21,10 +25,8 @@ async function startCapture(tab) {
   if (!tab || !tab.id) {
     tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
   }
-  console.log("startCapture for tab:", tab && tab.id, tab && tab.url);
   if (!tab || !tab.id) return;
 
-  console.log("injecting overlay...");
   // CSS и JS инжектим независимо: сбой стилей не должен блокировать оверлей
   try {
     await chrome.scripting.insertCSS({
@@ -32,47 +34,120 @@ async function startCapture(tab) {
       files: ["content/overlay.css"],
     });
   } catch (err) {
-    console.log("insertCSS error:", err.message);
+    console.error("insertCSS failed:", err.message);
   }
   try {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["content/overlay.js"],
     });
-    console.log("inject done");
   } catch (err) {
-    console.log("inject error:", err.message, err.stack);
-    console.log("cannot inject here");
+    console.error("cannot inject here:", err.message);
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.type === "analyze-image") {
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (!msg) return;
+
+  if (msg.type === "analyze-image") {
     handleAnalyze(msg.base64, sender.tab);
     return;
   }
-  if (!msg || msg.type !== "area-selected") return;
-  handleSelection(msg.rect, sender.tab);
+
+  if (msg.type === "cancel-analysis") {
+    const controller = activeStreams.get(sender.tab && sender.tab.id);
+    if (controller) controller.abort();
+    return;
+  }
+
+  if (msg.type === "area-selected") {
+    handleSelection(msg.rect, sender.tab);
+  }
 });
 
 async function handleAnalyze(base64Image, tab) {
   if (!tab || !tab.id) return;
-  try {
-    const { text, finishReason } = await callAPI(base64Image, SYSTEM_PROMPT);
-    await chrome.tabs.sendMessage(tab.id, {
-      type: "analysis-result",
-      text,
-      truncated: finishReason === "length",
+  const tabId = tab.id;
+
+  if (activeStreams.has(tabId)) activeStreams.get(tabId).abort();
+  const controller = new AbortController();
+  activeStreams.set(tabId, controller);
+
+  const send = (payload) => chrome.tabs.sendMessage(tabId, payload).catch(() => {});
+
+  // Каналу вредно гонять по букве: копим чанки и отдаём пачками раз в CHUNK_FLUSH_MS,
+  // хвост принудительно досылаем на конце стрима
+  let buffer = "";
+  let timer = null;
+  let closed = false;
+
+  const flush = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (!buffer) return;
+    const text = buffer;
+    buffer = "";
+    send({ type: "analysis-chunk", text });
+  };
+
+  const scheduleFlush = () => {
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      flush();
+    }, CHUNK_FLUSH_MS);
+  };
+
+  const finishUp = () => {
+    if (closed) return;
+    closed = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    activeStreams.delete(tabId);
+  };
+
+  const onChunk = (text) => {
+    if (!text) return;
+    buffer += text;
+    scheduleFlush();
+  };
+
+  const onEnd = (finishReason) => {
+    flush();
+    finishUp();
+    send({
+      type: "analysis-end",
+      truncated: finishReason === "length" || finishReason === "max_tokens",
     });
-  } catch (err) {
-    await chrome.tabs.sendMessage(tab.id, {
-      type: "analysis-error",
-      error: err.message,
-    });
+  };
+
+  const onError = (message) => {
+    finishUp();
+    send({ type: "analysis-error", error: message });
+  };
+
+  await send({ type: "analysis-start" });
+  await callAPIStream(base64Image, SYSTEM_PROMPT, onChunk, onEnd, onError, controller);
+
+  if (controller.signal.aborted && !closed) {
+    buffer = "";
+    finishUp();
+    send({ type: "analysis-canceled" });
   }
 }
 
-async function callAPI(base64Image, userPrompt) {
+async function callAPIStream(
+  base64Image,
+  userPrompt,
+  onChunk,
+  onEnd,
+  onError,
+  externalController
+) {
   const stored = await chrome.storage.local.get([
     "mode",
     "apiKey",
@@ -83,182 +158,210 @@ async function callAPI(base64Image, userPrompt) {
   ]);
   const mode = stored.mode || "own-key";
 
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: userPrompt },
+        {
+          type: "image_url",
+          image_url: { url: "data:image/png;base64," + base64Image },
+        },
+      ],
+    },
+  ];
+
+  let url;
+  let headers;
+  let body;
+
   if (mode === "password") {
-    return callBackend(base64Image, userPrompt, stored);
+    const password = stored.backendPassword;
+    const backendUrl = stored.backendUrl || DEFAULT_BACKEND_URL;
+    if (!password) {
+      onError("Пароль не задан. Откройте настройки расширения.");
+      return;
+    }
+    url = backendUrl.replace(/\/+$/, "") + "/api/analyze";
+    headers = { "Content-Type": "application/json" };
+    body = JSON.stringify({ password: password, messages: messages });
+  } else {
+    const apiKey = stored.apiKey;
+    const baseUrl = stored.baseUrl || DEFAULT_BASE_URL;
+    const model = stored.model || DEFAULT_MODEL;
+    if (!apiKey) {
+      onError("API key not set. Open extension popup and enter it.");
+      return;
+    }
+    url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+    headers = {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + apiKey,
+    };
+    body = JSON.stringify({
+      model: model,
+      messages: messages,
+      max_tokens: MAX_TOKENS,
+      stream: true,
+    });
   }
 
-  const apiKey = stored.apiKey;
-  const baseUrl = stored.baseUrl || DEFAULT_BASE_URL;
-  const model = stored.model || DEFAULT_MODEL;
+  const controller = externalController || new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
 
-  if (!apiKey) {
-    throw new Error("API key not set. Open extension popup and enter it.");
-  }
-
-  const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
+  let response;
   try {
-    const response = await fetch(url, {
+    response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + apiKey,
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: userPrompt },
-              {
-                type: "image_url",
-                image_url: { url: "data:image/png;base64," + base64Image },
-              },
-            ],
-          },
-        ],
-        max_tokens: MAX_TOKENS,
-      }),
+      headers: headers,
+      body: body,
       signal: controller.signal,
     });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      if (response.status === 401) throw new Error("Invalid API key (401)");
-      if (response.status === 429) throw new Error("Rate limit (429)");
-      throw new Error(
-        "API error " + response.status + ": " + errText.slice(0, 200)
-      );
-    }
-
-    const data = await response.json();
-    const choice = data?.choices?.[0];
-    const text = choice?.message?.content;
-    if (!text) throw new Error("Empty response from API");
-    return { text, finishReason: choice?.finish_reason };
-  } finally {
+  } catch (err) {
     clearTimeout(timeoutId);
-  }
-}
-
-async function callBackend(base64Image, userPrompt, stored) {
-  const password = stored.backendPassword;
-  const backendUrl = stored.backendUrl || DEFAULT_BACKEND_URL;
-
-  if (!password) {
-    throw new Error("Пароль не задан. Откройте настройки расширения.");
+    if (timedOut) onError("Превышено время ожидания ответа.");
+    else if (!controller.signal.aborted) onError(connectionErrorMessage(mode));
+    return;
   }
 
-  const url = backendUrl.replace(/\/+$/, "") + "/api/analyze";
+  if (!response.ok) {
+    clearTimeout(timeoutId);
+    const errText = await response.text().catch(() => "");
+    onError(httpErrorMessage(response.status, errText, mode));
+    return;
+  }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  if (!response.body) {
+    clearTimeout(timeoutId);
+    onError("Пустой ответ от сервера.");
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let finishReason;
+  let streamError;
+
+  const processEvent = (rawEvent) => {
+    for (const line of rawEvent.split("\n")) {
+      const t = line.trim();
+      if (!t.startsWith("data:")) continue;
+      const payload = t.slice(5).trim();
+      if (!payload) continue;
+      if (payload === "[DONE]") return true;
+
+      let obj;
+      try {
+        obj = JSON.parse(payload);
+      } catch (e) {
+        continue;
+      }
+
+      if (obj && obj.error) {
+        streamError =
+          typeof obj.error === "string" ? obj.error : JSON.stringify(obj.error);
+        return true;
+      }
+
+      const { text, finish } = extractContent(obj);
+      if (finish) finishReason = finish;
+      if (text) onChunk(text);
+    }
+    return false;
+  };
 
   try {
-    let response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          password: password,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: userPrompt },
-                {
-                  type: "image_url",
-                  image_url: { url: "data:image/png;base64," + base64Image },
-                },
-              ],
-            },
-          ],
-        }),
-        signal: controller.signal,
-      });
-    } catch (netErr) {
-      throw new Error("Сервер StudyLens недоступен. Проверьте подключение.");
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      pending += decoder.decode(value, { stream: true });
+      pending = pending.replace(/\r\n/g, "\n");
+
+      let idx;
+      while ((idx = pending.indexOf("\n\n")) !== -1) {
+        const rawEvent = pending.slice(0, idx);
+        pending = pending.slice(idx + 2);
+        if (processEvent(rawEvent)) {
+          clearTimeout(timeoutId);
+          if (streamError) onError(streamError);
+          else onEnd(finishReason);
+          return;
+        }
+      }
     }
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new Error("Неверный пароль. Откройте настройки расширения.");
+    // хвост без завершающего \n\n
+    if (pending.trim()) {
+      if (processEvent(pending)) {
+        clearTimeout(timeoutId);
+        if (streamError) onError(streamError);
+        else onEnd(finishReason);
+        return;
       }
-      if (response.status === 429) {
-        throw new Error("Слишком много запросов. Подождите минуту.");
-      }
-      if (response.status >= 500) {
-        throw new Error("Ошибка сервера StudyLens. Попробуйте позже.");
-      }
-      const errText = await response.text();
-      throw new Error(
-        "Ошибка StudyLens " + response.status + ": " + errText.slice(0, 200)
-      );
     }
 
-    // backend может отдать и JSON, и SSE (text/event-stream).
-    // Разбираем оба, чтобы не зависеть от того, какой вариант включён
-    const raw = await response.text();
-    const choice = parseBackendChoice(raw);
-    const text = choice?.message?.content;
-    if (!text) throw new Error("Пустой ответ от сервера.");
-    return { text, finishReason: choice?.finish_reason };
-  } finally {
     clearTimeout(timeoutId);
+    onEnd(finishReason);
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (timedOut) onError("Превышено время ожидания ответа.");
+    else if (!controller.signal.aborted) onError(connectionErrorMessage(mode));
   }
 }
 
-// TODO(подэтап B): стриминг ответа через SSE (stream: true)
-async function callAPIStream(base64Image, userPrompt) {
-  throw new Error("callAPIStream not implemented");
+// Поддерживаем оба формата: OpenAI (choices[].delta.content) и
+// Anthropic (content_block_delta.delta.text), backend может вернуть любой
+function extractContent(obj) {
+  const choice = obj && obj.choices && obj.choices[0];
+  if (choice) {
+    if (typeof choice.delta?.content === "string") {
+      return { text: choice.delta.content, finish: choice.finish_reason };
+    }
+    if (typeof choice.message?.content === "string") {
+      return { text: choice.message.content, finish: choice.finish_reason };
+    }
+    if (choice.finish_reason) return { text: "", finish: choice.finish_reason };
+  }
+
+  if (obj && obj.type === "content_block_delta" && typeof obj.delta?.text === "string") {
+    return { text: obj.delta.text };
+  }
+  if (obj && typeof obj.delta?.text === "string") {
+    return { text: obj.delta.text };
+  }
+  if (obj && obj.type === "message_delta" && obj.delta?.stop_reason) {
+    return { text: "", finish: obj.delta.stop_reason };
+  }
+
+  return { text: "" };
 }
 
-// Извлекает choices[0] из полного JSON или собирает его из SSE-чанков
-function parseBackendChoice(raw) {
-  const trimmed = raw.trim();
-
-  if (trimmed.startsWith("{")) {
-    try {
-      return JSON.parse(trimmed)?.choices?.[0];
-    } catch (e) {
-      // не полный JSON, пробуем как SSE ниже
-    }
+function httpErrorMessage(status, errText, mode) {
+  if (mode === "password") {
+    if (status === 401) return "Неверный пароль. Откройте настройки расширения.";
+    if (status === 429) return "Слишком много запросов. Подождите минуту.";
+    if (status >= 500) return "Ошибка сервера StudyLens. Попробуйте позже.";
+    return "Ошибка StudyLens " + status + ": " + errText.slice(0, 200);
   }
+  if (status === 401) return "Invalid API key (401)";
+  if (status === 429) return "Rate limit (429)";
+  return "API error " + status + ": " + errText.slice(0, 200);
+}
 
-  let text = "";
-  let finishReason;
-  let sawChunk = false;
-
-  for (const line of raw.split("\n")) {
-    const t = line.trim();
-    if (!t.startsWith("data:")) continue;
-    const payload = t.slice(5).trim();
-    if (!payload || payload === "[DONE]") continue;
-    let obj;
-    try {
-      obj = JSON.parse(payload);
-    } catch (e) {
-      continue;
-    }
-    sawChunk = true;
-    const c = obj?.choices?.[0];
-    if (!c) continue;
-    if (typeof c.delta?.content === "string") text += c.delta.content;
-    if (typeof c.message?.content === "string") text += c.message.content;
-    if (c.finish_reason) finishReason = c.finish_reason;
+function connectionErrorMessage(mode) {
+  if (mode === "password") {
+    return "Сервер StudyLens недоступен. Проверьте подключение.";
   }
-
-  if (!sawChunk) return undefined;
-  return { message: { content: text }, finish_reason: finishReason };
+  return "Не удалось подключиться к API. Проверьте подключение.";
 }
 
 async function handleSelection(rect, tab) {
-  console.log("capture: rect=" + JSON.stringify(rect));
   if (!tab || !tab.id) return;
 
   try {
@@ -266,7 +369,7 @@ async function handleSelection(rect, tab) {
     const base64 = await cropDataUrl(dataUrl, rect);
     await chrome.tabs.sendMessage(tab.id, { type: "captured-image", base64 });
   } catch (err) {
-    console.log("capture failed", err.message);
+    console.error("capture failed:", err.message);
   }
 }
 

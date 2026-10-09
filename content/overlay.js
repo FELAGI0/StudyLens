@@ -104,32 +104,19 @@
   overlay.appendChild(indicator);
   document.documentElement.appendChild(overlay);
 
-  console.log(
-    "rect el created:",
-    selection.tagName,
-    selection.className,
-    selection.style.cssText
-  );
-  console.log("rect el in DOM:", document.contains(selection));
-  console.log(
-    "rect el computed:",
-    JSON.stringify({
-      position: getComputedStyle(selection).position,
-      display: getComputedStyle(selection).display,
-      zIndex: getComputedStyle(selection).zIndex,
-      border: getComputedStyle(selection).borderTopWidth,
-      background: getComputedStyle(selection).backgroundColor,
-      visibility: getComputedStyle(selection).visibility,
-      opacity: getComputedStyle(selection).opacity,
-    })
-  );
-
   let startX = 0;
   let startY = 0;
   let dragging = false;
 
   const STATUS_ID = "studylens-status";
   const STATUS_STYLE_ID = "studylens-status-style";
+
+  let panelEl = null;
+  let bodyTextEl = null;
+  let cursorEl = null;
+  let cancelBtn = null;
+  let panelText = "";
+  let streaming = false;
 
   // @keyframes нельзя задать через inline-стиль, поэтому держим их
   // в отдельном теге и добавляем один раз
@@ -144,42 +131,58 @@
       "#studylens-status .studylens-dots::after{",
       "content:'';animation:studylens-dots 1.2s steps(1,end) infinite;",
       "}",
+      "@keyframes studylens-blink{0%,49%{opacity:1}50%,100%{opacity:0}}",
+      "#studylens-status .studylens-cursor{",
+      "animation:studylens-blink 1s step-end infinite;",
+      "}",
       "#studylens-status .studylens-status-text{white-space:pre-wrap;word-break:break-word;}",
     ].join("");
     document.documentElement.appendChild(style);
   };
 
-  const removeStatus = () => {
-    const el = document.getElementById(STATUS_ID);
-    if (el) el.remove();
+  const scrollToBottom = () => {
+    if (panelEl) panelEl.scrollTop = panelEl.scrollHeight;
   };
 
-  const addCloseButton = (box) => {
+  const removeStatus = () => {
+    if (panelEl) panelEl.remove();
+    panelEl = null;
+    bodyTextEl = null;
+    cursorEl = null;
+    cancelBtn = null;
+    panelText = "";
+    streaming = false;
+    document.removeEventListener("keydown", onPanelKeyDown, true);
+  };
+
+  const makeButton = (label, onClick) => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = "\u00d7";
+    btn.textContent = label;
     setImp(btn, {
       "flex": "0 0 auto",
-      "margin": "0",
-      "padding": "0",
-      "background": "transparent",
-      "border": "none",
-      "color": "#bbbbbb",
-      "font": "16px/1 system-ui, sans-serif",
-      "font-weight": "700",
-      "cursor": "pointer",
+      margin: "0",
+      padding: "2px 6px",
+      background: "transparent",
+      border: "1px solid #555555",
+      "border-radius": "4px",
+      color: "#dddddd",
+      font: "11px/1.2 system-ui, sans-serif",
+      cursor: "pointer",
       "pointer-events": "auto",
+      "white-space": "nowrap",
     });
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      removeStatus();
+      onClick();
     });
-    box.appendChild(btn);
+    return btn;
   };
 
-  const createStatus = () => {
+  const createPanel = () => {
     removeStatus();
     ensureStatusStyles();
+
     const box = document.createElement("div");
     box.id = STATUS_ID;
     setImp(box, {
@@ -199,42 +202,89 @@
       overflow: "auto",
       "box-sizing": "border-box",
       display: "flex",
+      "flex-direction": "column",
       gap: "8px",
-      "align-items": "flex-start",
       "text-align": "left",
       "pointer-events": "auto",
     });
+
+    const header = document.createElement("div");
+    setImp(header, {
+      display: "flex",
+      gap: "6px",
+      "align-items": "center",
+      "justify-content": "flex-end",
+      "flex": "0 0 auto",
+    });
+
+    const copyBtn = makeButton("Копировать", () => {
+      navigator.clipboard.writeText(panelText).catch(() => {});
+    });
+    cancelBtn = makeButton("Отмена", () => {
+      chrome.runtime.sendMessage({ type: "cancel-analysis" });
+    });
+    const closeBtn = makeButton("\u00d7", () => removeStatus());
+    setImp(closeBtn, {
+      "font-size": "14px",
+      "font-weight": "700",
+      "padding": "1px 7px",
+    });
+
+    header.appendChild(copyBtn);
+    header.appendChild(cancelBtn);
+    header.appendChild(closeBtn);
+    box.appendChild(header);
+
+    const body = document.createElement("div");
+    setImp(body, { "min-width": "0", "flex": "1 1 auto" });
+
+    bodyTextEl = document.createElement("span");
+    bodyTextEl.className = "studylens-status-text";
+    body.appendChild(bodyTextEl);
+
+    cursorEl = document.createElement("span");
+    cursorEl.className = "studylens-cursor";
+    cursorEl.textContent = "\u258e";
+
+    box.appendChild(body);
     document.documentElement.appendChild(box);
+
+    panelEl = box;
     return box;
   };
 
-  const startAnalysis = (base64) => {
-    const box = createStatus();
-    const text = document.createElement("div");
-    text.className = "studylens-status-text";
-    text.textContent = "Analyzing";
+  const startPanel = () => {
+    createPanel();
+    streaming = true;
+    panelText = "";
+    setImp(cancelBtn, { display: "inline-block" });
+
+    bodyTextEl.textContent = "Analyzing";
     const dots = document.createElement("span");
     dots.className = "studylens-dots";
-    text.appendChild(dots);
-    box.appendChild(text);
-    chrome.runtime.sendMessage({ type: "analyze-image", base64 });
+    bodyTextEl.appendChild(dots);
   };
 
-  const showResult = (fullText, truncated) => {
-    const box = document.getElementById(STATUS_ID) || createStatus();
-    box.textContent = "";
-    // контент и футер в колонку, кнопка закрытия сидит рядом во flex-строке
-    const content = document.createElement("div");
-    setImp(content, {
-      display: "flex",
-      "flex-direction": "column",
-      "min-width": "0",
-      "flex": "1 1 auto",
-    });
-    const text = document.createElement("div");
-    text.className = "studylens-status-text";
-    text.textContent = fullText;
-    content.appendChild(text);
+  const appendChunk = (text) => {
+    if (!panelEl) createPanel();
+    if (!streaming) return;
+
+    // первый чанк приходит после "Analyzing" - затираем его
+    if (!panelText) bodyTextEl.textContent = "";
+
+    panelText += text;
+    bodyTextEl.textContent = panelText;
+    bodyTextEl.appendChild(cursorEl);
+
+    scrollToBottom();
+  };
+
+  const endStream = (truncated) => {
+    if (!panelEl) return;
+    streaming = false;
+    if (cancelBtn) setImp(cancelBtn, { display: "none" });
+    if (cursorEl) cursorEl.remove();
+
     if (truncated) {
       const note = document.createElement("div");
       note.className = "studylens-status-note";
@@ -244,38 +294,76 @@
         font: "11px/1.4 system-ui, sans-serif",
         color: "#999999",
       });
-      content.appendChild(note);
+      panelEl.appendChild(note);
+      scrollToBottom();
     }
-    box.appendChild(content);
-    addCloseButton(box);
   };
 
   const showError = (error) => {
-    const box = document.getElementById(STATUS_ID) || createStatus();
-    box.textContent = "";
-    const text = document.createElement("div");
-    text.className = "studylens-status-text";
-    text.textContent = error;
-    setImp(text, { color: "#f87171" });
-    box.appendChild(text);
-    addCloseButton(box);
+    createPanel();
+    streaming = false;
+    if (cancelBtn) setImp(cancelBtn, { display: "none" });
+    bodyTextEl.textContent = error;
+    setImp(bodyTextEl, { color: "#f87171" });
   };
 
-  // Listener живёт до первого ответа analysis-*, потом снимается,
-  // чтобы не копились при повторных захватах
+  const showCanceled = () => {
+    if (!panelEl) return;
+    streaming = false;
+    if (cancelBtn) setImp(cancelBtn, { display: "none" });
+    if (cursorEl) cursorEl.remove();
+    const note = document.createElement("div");
+    note.className = "studylens-status-note";
+    note.textContent = "(отменено)";
+    setImp(note, {
+      margin: "6px 0 0",
+      font: "11px/1.4 system-ui, sans-serif",
+      color: "#999999",
+    });
+    panelEl.appendChild(note);
+    scrollToBottom();
+  };
+
+  const onPanelKeyDown = (e) => {
+    if (e.key === "Escape" && panelEl) {
+      removeStatus();
+    }
+  };
+
+  const startAnalysis = (base64) => {
+    startPanel();
+    document.addEventListener("keydown", onPanelKeyDown, true);
+    chrome.runtime.sendMessage({ type: "analyze-image", base64 });
+  };
+
+  // Не снимаем listener по ходу стрима: чанки идут потоком.
+  // Снимаем только на терминальном событии, чтобы не копились обработчики
   const onMessage = (msg) => {
     if (!msg) return;
+
     if (msg.type === "captured-image") {
       startAnalysis(msg.base64);
       return;
     }
-    if (msg.type === "analysis-result") {
-      showResult(msg.text, msg.truncated);
+    if (msg.type === "analysis-start") {
+      return;
+    }
+    if (msg.type === "analysis-chunk") {
+      appendChunk(msg.text);
+      return;
+    }
+    if (msg.type === "analysis-end") {
+      endStream(msg.truncated);
       chrome.runtime.onMessage.removeListener(onMessage);
       return;
     }
     if (msg.type === "analysis-error") {
       showError(msg.error);
+      chrome.runtime.onMessage.removeListener(onMessage);
+      return;
+    }
+    if (msg.type === "analysis-canceled") {
+      showCanceled();
       chrome.runtime.onMessage.removeListener(onMessage);
     }
   };
@@ -302,28 +390,6 @@
     });
     indicator.textContent = `${Math.round(width)} x ${Math.round(height)}`;
 
-    console.log(
-      "indicator styles:",
-      JSON.stringify({
-        width: getComputedStyle(indicator).width,
-        height: getComputedStyle(indicator).height,
-        position: getComputedStyle(indicator).position,
-        display: getComputedStyle(indicator).display,
-        left: getComputedStyle(indicator).left,
-        top: getComputedStyle(indicator).top,
-        transform: getComputedStyle(indicator).transform,
-      })
-    );
-
-    console.log(
-      "updateBox:",
-      left,
-      top,
-      width,
-      height,
-      selection.style.getPropertyValue("width"),
-      selection.style.getPropertyPriority("width")
-    );
     return { left, top, width, height };
   };
 
